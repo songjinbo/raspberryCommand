@@ -129,11 +129,18 @@ int main()
 	while(1)
 	{
 		usleep(50000);
-		command.control = MOVE_BY_OFFSET;
-		command.argv[0] = 1;
-		command.argv[1] = 1;
-		command.argv[2] = 0;
-		command.argv[4] = 1000;
+		pthread_mutex_lock(&mutex);
+		if(stackCommand.empty())
+		{
+			pthread_mutex_unlock(&mutex);
+			continue;
+		}
+		command = stackCommand.top();
+		while(!stackCommand.empty())
+		{
+			stackCommand.pop();
+		}
+		pthread_mutex_unlock(&mutex);
 
 		if(command.control == ATTITUDE_CONTROL ||command.control == ATTITUDE_ALTITUDE_CONTROL ||\
 				command.control == MOVE_BY_OFFSET||command.control == MOVE_WITH_VELOCITY)
@@ -260,12 +267,38 @@ int RecvData(int sock, void *buf, int size)
 
 void *RecvCommand(void *argv)
 {
-	int a = 0;
-	while(1)
+	COMMAND command;	
+	clock_t start,end;
+	double t;
+	while(1)	
 	{
-		cout<<"----------------"<<a<<std::endl;
-		usleep(100000);
-		a++;
-	}
-}
+		int ret = RecvData(socket_fd,&command,sizeof(struct COMMAND));
+		if(ret<0)
+		{
+			//close socket
+			close(socket_fd);  
 
+			std::cout<<"接收数据发生错误"<<std::endl;
+			ackReturnData landingStatus = landing(api, flight,blockingTimeout);
+			int cleanupStatus = cleanup(serialDevice, api, flight, read1);
+			if (cleanupStatus == -1)
+			{
+				std::cout << "Unable to cleanly destroy OSDK infrastructure. There may be residual objects in the system memory.\n";
+				break;
+			}
+			std::cout << "Program exited successfully." << std::endl;
+
+		}
+
+		pthread_mutex_lock(&mutex);
+		stackCommand.push(command);
+		pthread_mutex_unlock(&mutex);
+
+		end = clock();
+		t = (double)(end-start);
+		outfile<<command.count<<"："<<t/CLOCKS_PER_SEC*1000<<std::endl;
+		std::cout<<command.count<<"："<<t/CLOCKS_PER_SEC*1000<<std::endl;
+		start = end;
+	}
+	std::cout<<"退出子线程"<<std::endl;
+}
