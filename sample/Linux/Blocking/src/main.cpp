@@ -109,7 +109,6 @@ int main()
 
 	//---------------连接socket------------------//
 	initSocket(socket_fd);
-
 	std::cout<<"wait for command！"<<std::endl;
 	//创建并执行子线程
 	int res;
@@ -235,6 +234,12 @@ void initSocket(int &socket_fd)
 	servaddr.sin_addr.s_addr = htonl(INADDR_ANY);//IP地址设置成INADDR_ANY,让系统自动获取本机的IP地址。  
 	servaddr.sin_port = htons(5000);//设置的端口为4000
 	//将本地地址绑定到所创建的套接字上  
+	const int rcv_size = 310*1024;//设置接收缓冲区大小
+	if(setsockopt(socket_fd,SOL_SOCKET,SO_RCVBUF,(char *)&rcv_size,sizeof(rcv_size))<0)
+	{
+		perror("set the size of rcv_buf");
+		exit(0);
+	}
 	if( bind(socket_fd, (struct sockaddr*)&servaddr, sizeof(servaddr)) == -1)
 	{  
 		printf("bind socket error: %s(errno: %d)\n",strerror(errno),errno);  
