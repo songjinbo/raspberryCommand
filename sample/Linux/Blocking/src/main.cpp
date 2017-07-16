@@ -65,6 +65,7 @@ LinuxSerialDevice* serialDevice;
 CoreAPI* api; 
 Flight* flight; 
 LinuxThread* read1;
+
 int blockingTimeout = 1; //Seconds
 int socket_fd;
 void sigroutine(int dunno)
@@ -96,7 +97,7 @@ int main()
 	api = new CoreAPI(serialDevice);
 	flight = new Flight(api);
 	read1 = new LinuxThread(api, 2);
-
+	
 	//---------------连接飞控-------------------//
 	int setupStatus = setup(serialDevice, api, read1);
 	if (setupStatus == -1)
@@ -106,7 +107,7 @@ int main()
 	}
 	unsigned short broadcastAck = api->setBroadcastFreqDefaults(1);
 	usleep(500000);
-
+	
 	//---------------连接socket------------------//
 	initSocket(socket_fd);
 	std::cout<<"wait for command！"<<std::endl;
@@ -128,12 +129,19 @@ int main()
 	int count = 0;
 	while(1)
 	{
-		usleep(50000);
-		command.control = MOVE_BY_OFFSET;
-		command.argv[0] = 1;
-		command.argv[1] = 1;
-		command.argv[2] = 0;
-		command.argv[4] = 1000;
+		usleep(100000);
+		pthread_mutex_lock(&mutex);
+		if(stackCommand.empty())
+		{
+			pthread_mutex_unlock(&mutex);
+			continue;
+		}
+		command = stackCommand.top();
+		while(!stackCommand.empty())
+		{
+			stackCommand.pop();
+		}
+		pthread_mutex_unlock(&mutex);
 
 		if(command.control == ATTITUDE_CONTROL ||command.control == ATTITUDE_ALTITUDE_CONTROL ||\
 				command.control == MOVE_BY_OFFSET||command.control == MOVE_WITH_VELOCITY)
@@ -150,7 +158,7 @@ int main()
 		switch(command.control)
 		{
 			case TAKEOFF:
-				//ackReturnData takeoff(Flight* flight, int timeout = 1);
+				ackReturnData takeoff(Flight* flight, int timeout = 1);
 				break;
 
 			case MONITORED_TAKEOFF:
@@ -170,7 +178,7 @@ int main()
 
 			case MOVE_BY_OFFSET:
 				std::cout<<"move by offset!"<<std::endl;
-				status = moveByPositionOffset(api, flight, command.argv[0], command.argv[1], command.argv[2], yaw,command.argv[4]);
+				status = moveByPositionOffset(api, flight, command.argv[0], command.argv[1], command.argv[2],yaw,command.argv[4]);
 				break;
 
 			case MOVE_WITH_VELOCITY:
@@ -193,7 +201,7 @@ int main()
 				break;
 		}
 	}
-	
+
 	pthread_cancel(a_thread);
 
 	std::cout<<"退出while循环"<<std::endl;
@@ -260,12 +268,40 @@ int RecvData(int sock, void *buf, int size)
 
 void *RecvCommand(void *argv)
 {
-	int a = 0;
-	while(1)
+	COMMAND command;	
+	clock_t start,end;
+	double t;
+	while(1)	
 	{
-		cout<<"----------------"<<a<<std::endl;
-		usleep(100000);
-		a++;
-	}
-}
+		int ret = RecvData(socket_fd,&command,sizeof(struct COMMAND));
+		if(ret<0)
+		{
+			//close socket
+			close(socket_fd);  
 
+			std::cout<<"接收数据发生错误"<<std::endl;
+
+			ackReturnData landingStatus = landing(api, flight,blockingTimeout);
+			int cleanupStatus = cleanup(serialDevice, api, flight, read1);
+			if (cleanupStatus == -1)
+			{
+				std::cout << "Unable to cleanly destroy OSDK infrastructure. There may be residual objects in the system memory.\n";
+				break;
+			}
+
+			std::cout << "Program exited successfully." << std::endl;
+
+		}
+
+		pthread_mutex_lock(&mutex);
+		stackCommand.push(command);
+		pthread_mutex_unlock(&mutex);
+
+		end = clock();
+		t = (double)(end-start);
+		outfile<<command.count<<"："<<t/CLOCKS_PER_SEC*1000<<std::endl;
+		std::cout<<command.count<<"："<<t/CLOCKS_PER_SEC*1000<<std::endl;
+		start = end;
+	}
+	std::cout<<"退出子线程"<<std::endl;
+}
